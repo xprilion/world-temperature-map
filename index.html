@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Temperature World Map</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* Tailwind gray-900 */
+            color: #f3f4f6; /* Tailwind gray-100 */
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+        .country {
+            stroke: #111827;
+            stroke-width: 0.5px;
+            transition: fill 0.3s ease-in-out;
+        }
+        .country:hover {
+            stroke: #ffffff;
+            stroke-width: 1.5px;
+        }
+        .graticule {
+            fill: none;
+            stroke: #374151; /* Tailwind gray-700 */
+            stroke-width: 0.5px;
+            stroke-opacity: 0.5;
+        }
+        #tooltip {
+            position: absolute;
+            background-color: rgba(17, 24, 39, 0.9); /* Tailwind gray-900 with opacity */
+            color: #f9fafb; /* Tailwind gray-50 */
+            border: 1px solid #4b5563; /* Tailwind gray-600 */
+            padding: 12px;
+            border-radius: 8px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            font-size: 0.875rem;
+            z-index: 10;
+        }
+        #tooltip h3 {
+            margin: 0 0 8px 0;
+            font-weight: 600;
+            color: #d1d5db; /* Tailwind gray-300 */
+        }
+        #tooltip table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        #tooltip th, #tooltip td {
+            padding: 4px 8px;
+            text-align: left;
+        }
+        #tooltip th {
+            font-weight: 500;
+            color: #9ca3af; /* Tailwind gray-400 */
+        }
+         #tooltip td {
+            font-weight: 400;
+            color: #e5e7eb; /* Tailwind gray-200 */
+        }
+    </style>
+</head>
+<body class="w-screen h-screen flex items-center justify-center">
+
+    <!-- Main SVG container for the map -->
+    <div id="map-container" class="w-full h-full"></div>
+
+    <!-- Tooltip element -->
+    <div id="tooltip"></div>
+
+    <!-- Sidebar controls -->
+    <div id="controls" class="absolute top-4 left-4 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg text-white max-w-xs">
+        <h2 class="text-lg font-bold mb-3 border-b border-gray-600 pb-2">Filter by Month</h2>
+        <div class="flex items-center justify-between mb-3">
+            <label for="temperature-type" class="text-sm font-medium">Metric:</label>
+            <select id="temperature-type" class="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="avg" selected>Average Temp</option>
+                <option value="high">High Temp</option>
+                <option value="low">Low Temp</option>
+            </select>
+        </div>
+        <div id="month-checkboxes" class="grid grid-cols-2 gap-2 text-sm">
+            <!-- Checkboxes will be inserted here by JS -->
+        </div>
+        <div class="mt-4 flex space-x-2">
+            <button id="select-all" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-1.5 px-3 rounded-md text-xs transition-colors">Select All</button>
+            <button id="deselect-all" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-semibold py-1.5 px-3 rounded-md text-xs transition-colors">Deselect All</button>
+        </div>
+    </div>
+    
+    <!-- Legend -->
+    <div id="legend" class="absolute bottom-4 right-4 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-3 rounded-lg shadow-lg text-white text-xs">
+        <div id="legend-gradient" class="h-4 w-48 rounded mb-1"></div>
+        <div class="flex justify-between font-medium">
+            <span id="legend-min">-30°C</span>
+            <span>Temperature</span>
+            <span id="legend-max">40°C</span>
+        </div>
+    </div>
+
+    <script>
+        // Temperature data (in Celsius) for various countries by ISO 3166-1 alpha-3 code
+        const temperatureData = {
+            "USA": [{m:"Jan",h:3,l:-7},{m:"Feb",h:6,l:-5},{m:"Mar",h:12,l:0},{m:"Apr",h:18,l:5},{m:"May",h:24,l:11},{m:"Jun",h:29,l:16},{m:"Jul",h:31,l:18},{m:"Aug",h:30,l:17},{m:"Sep",h:26,l:13},{m:"Oct",h:19,l:7},{m:"Nov",h:12,l:1},{m:"Dec",h:5,l:-4}],
+            "CAN": [{m:"Jan",h:-15,l:-25},{m:"Feb",h:-13,l:-24},{m:"Mar",h:-5,l:-15},{m:"Apr",h:5,l:-4},{m:"May",h:14,l:3},{m:"Jun",h:20,l:9},{m:"Jul",h:23,l:12},{m:"Aug",h:21,l:10},{m:"Sep",h:16,l:5},{m:"Oct",h:8,l:-1},{m:"Nov",h:0,l:-8},{m:"Dec",h:-10,l:-19}],
+            "MEX": [{m:"Jan",h:24,l:11},{m:"Feb",h:26,l:12},{m:"Mar",h:28,l:14},{m:"Apr",h:30,l:16},{m:"May",h:30,l:17},{m:"Jun",h:28,l:17},{m:"Jul",h:27,l:16},{m:"Aug",h:27,l:16},{m:"Sep",h:26,l:16},{m:"Oct",h:26,l:14},{m:"Nov",h:25,l:12},{m:"Dec",h:24,l:11}],
+            "BRA": [{m:"Jan",h:30,l:23},{m:"Feb",h:30,l:23},{m:"Mar",h:29,l:23},{m:"Apr",h:28,l:21},{m:"May",h:26,l:20},{m:"Jun",h:25,l:19},{m:"Jul",h:25,l:18},{m:"Aug",h:26,l:18},{m:"Sep",h:27,l:19},{m:"Oct",h:28,l:21},{m:"Nov",h:28,l:22},{m:"Dec",h:29,l:22}],
+            "ARG": [{m:"Jan",h:30,l:18},{m:"Feb",h:28,l:17},{m:"Mar",h:26,l:15},{m:"Apr",h:22,l:11},{m:"May",h:18,l:8},{m:"Jun",h:15,l:5},{m:"Jul",h:15,l:5},{m:"Aug",h:17,l:6},{m:"Sep",h:20,l:8},{m:"Oct",h:23,l:11},{m:"Nov",h:26,l:14},{m:"Dec",h:29,l:17}],
+            "GBR": [{m:"Jan",h:7,l:2},{m:"Feb",h:7,l:2},{m:"Mar",h:10,l:3},{m:"Apr",h:13,l:5},{m:"May",h:16,l:8},{m:"Jun",h:19,l:11},{m:"Jul",h:21,l:13},{m:"Aug",h:21,l:13},{m:"Sep",h:18,l:11},{m:"Oct",h:14,l:8},{m:"Nov",h:10,l:5},{m:"Dec",h:7,l:2}],
+            "FRA": [{m:"Jan",h:8,l:3},{m:"Feb",h:9,l:3},{m:"Mar",h:13,l:5},{m:"Apr",h:16,l:7},{m:"May",h:20,l:11},{m:"Jun",h:24,l:14},{m:"Jul",h:26,l:16},{m:"Aug",h:26,l:16},{m:"Sep",h:22,l:13},{m:"Oct",h:17,l:10},{m:"Nov",h:11,l:6},{m:"Dec",h:8,l:3}],
+            "DEU": [{m:"Jan",h:3,l:-2},{m:"Feb",h:5,l:-2},{m:"Mar",h:9,l:1},{m:"Apr",h:14,l:4},{m:"May",h:19,l:9},{m:"Jun",h:22,l:12},{m:"Jul",h:24,l:14},{m:"Aug",h:24,l:14},{m:"Sep",h:19,l:10},{m:"Oct",h:13,l:6},{m:"Nov",h:7,l:2},{m:"Dec",h:4,l:-1}],
+            "RUS": [{m:"Jan",h:-10,l:-16},{m:"Feb",h:-8,l:-15},{m:"Mar",h:-1,l:-9},{m:"Apr",h:8,l:0},{m:"May",h:17,l:7},{m:"Jun",h:21,l:11},{m:"Jul",h:24,l:14},{m:"Aug",h:21,l:12},{m:"Sep",h:15,l:7},{m:"Oct",h:7,l:1},{m:"Nov",h:-1,l:-5},{m:"Dec",h:-7,l:-12}],
+            "CHN": [{m:"Jan",h:2,l:-9},{m:"Feb",h:6,l:-6},{m:"Mar",h:13,l:0},{m:"Apr",h:21,l:8},{m:"May",h:27,l:14},{m:"Jun",h:31,l:19},{m:"Jul",h:32,l:22},{m:"Aug",h:30,l:21},{m:"Sep",h:26,l:15},{m:"Oct",h:19,l:8},{m:"Nov",h:10,l:-1},{m:"Dec",h:3,l:-7}],
+            "IND": [{m:"Jan",h:29,l:15},{m:"Feb",h:31,l:17},{m:"Mar",h:35,l:21},{m:"Apr",h:38,l:25},{m:"May",h:39,l:27},{m:"Jun",h:35,l:26},{m:"Jul",h:31,l:25},{m:"Aug",h:31,l:24},{m:"Sep",h:32,l:23},{m:"Oct",h:33,l:21},{m:"Nov",h:31,l:18},{m:"Dec",h:29,l:15}],
+            "JPN": [{m:"Jan",h:10,l:2},{m:"Feb",h:10,l:2},{m:"Mar",h:14,l:5},{m:"Apr",h:19,l:10},{m:"May",h:23,l:15},{m:"Jun",h:26,l:19},{m:"Jul",h:29,l:23},{m:"Aug",h:31,l:24},{m:"Sep",h:27,l:21},{m:"Oct",h:22,l:15},{m:"Nov",h:17,l:9},{m:"Dec",h:12,l:4}],
+            "AUS": [{m:"Jan",h:31,l:19},{m:"Feb",h:30,l:19},{m:"Mar",h:28,l:17},{m:"Apr",h:25,l:13},{m:"May",h:21,l:10},{m:"Jun",h:18,l:7},{m:"Jul",h:17,l:6},{m:"Aug",h:19,l:7},{m:"Sep",h:22,l:10},{m:"Oct",h:26,l:13},{m:"Nov",h:28,l:15},{m:"Dec",h:30,l:17}],
+            "EGY": [{m:"Jan",h:20,l:9},{m:"Feb",h:22,l:10},{m:"Mar",h:25,l:13},{m:"Apr",h:30,l:16},{m:"May",h:34,l:20},{m:"Jun",h:36,l:22},{m:"Jul",h:37,l:24},{m:"Aug",h:37,l:24},{m:"Sep",h:34,l:22},{m:"Oct",h:31,l:19},{m:"Nov",h:26,l:15},{m:"Dec",h:21,l:11}],
+            "ZAF": [{m:"Jan",h:26,l:16},{m:"Feb",h:26,l:16},{m:"Mar",h:25,l:14},{m:"Apr",h:22,l:11},{m:"May",h:20,l:8},{m:"Jun",h:17,l:5},{m:"Jul",h:17,l:4},{m:"Aug",h:19,l:6},{m:"Sep",h:22,l:9},{m:"Oct",h:23,l:11},{m:"Nov",h:24,l:13},{m:"Dec",h:25,l:15}],
+            "NGA": [{m:"Jan",h:33,l:22},{m:"Feb",h:34,l:24},{m:"Mar",h:34,l:24},{m:"Apr",h:32,l:23},{m:"May",h:31,l:23},{m:"Jun",h:29,l:22},{m:"Jul",h:28,l:22},{m:"Aug",h:28,l:21},{m:"Sep",h:28,l:22},{m:"Oct",h:30,l:22},{m:"Nov",h:32,l:23},{m:"Dec",h:33,l:22}],
+            "IDN": [{m:"Jan",h:31,l:24},{m:"Feb",h:31,l:24},{m:"Mar",h:32,l:24},{m:"Apr",h:32,l:25},{m:"May",h:32,l:25},{m:"Jun",h:32,l:24},{m:"Jul",h:32,l:24},{m:"Aug",h:32,l:24},{m:"Sep",h:32,l:24},{m:"Oct",h:32,l:24},{m:"Nov",h:32,l:24},{m:"Dec",h:31,l:24}],
+            "SAU": [{m:"Jan",h:20,l:8},{m:"Feb",h:23,l:10},{m:"Mar",h:28,l:14},{m:"Apr",h:34,l:20},{m:"May",h:40,l:25},{m:"Jun",h:42,l:27},{m:"Jul",h:43,l:28},{m:"Aug",h:43,l:28},{m:"Sep",h:40,l:25},{m:"Oct",h:35,l:20},{m:"Nov",h:27,l:14},{m:"Dec",h:22,l:10}],
+            "IRN": [{m:"Jan",h:8,l:-1},{m:"Feb",h:11,l:1},{m:"Mar",h:16,l:5},{m:"Apr",h:22,l:10},{m:"May",h:28,l:15},{m:"Jun",h:34,l:20},{m:"Jul",h:37,l:23},{m:"Aug",h:36,l:22},{m:"Sep",h:31,l:18},{m:"Oct",h:24,l:12},{m:"Nov",h:16,l:6},{m:"Dec",h:10,l:1}],
+            "TUR": [{m:"Jan",h:6,l:0},{m:"Feb",h:8,l:1},{m:"Mar",h:12,l:3},{m:"Apr",h:17,l:7},{m:"May",h:22,l:11},{m:"Jun",h:27,l:15},{m:"Jul",h:30,l:18},{m:"Aug",h:30,l:18},{m:"Sep",h:26,l:14},{m:"Oct",h:20,l:10},{m:"Nov",h:14,l:6},{m:"Dec",h:8,l:2}],
+            "ESP": [{m:"Jan",h:13,l:4},{m:"Feb",h:15,l:5},{m:"Mar",h:18,l:7},{m:"Apr",h:20,l:9},{m:"May",h:24,l:12},{m:"Jun",h:30,l:17},{m:"Jul",h:34,l:20},{m:"Aug",h:33,l:20},{m:"Sep",h:28,l:16},{m:"Oct",h:22,l:12},{m:"Nov",h:16,l:7},{m:"Dec",h:13,l:5}],
+            "ITA": [{m:"Jan",h:12,l:3},{m:"Feb",h:13,l:3},{m:"Mar",h:16,l:6},{m:"Apr",h:19,l:8},{m:"May",h:24,l:12},{m:"Jun",h:28,l:16},{m:"Jul",h:31,l:19},{m:"Aug",h:31,l:19},{m:"Sep",h:27,l:15},{m:"Oct",h:22,l:11},{m:"Nov",h:16,l:7},{m:"Dec",h:13,l:4}],
+            "SWE": [{m:"Jan",h:-1,l:-5},{m:"Feb",h:0,l:-6},{m:"Mar",h:4,l:-3},{m:"Apr",h:10,l:1},{m:"May",h:16,l:6},{m:"Jun",h:20,l:11},{m:"Jul",h:23,l:14},{m:"Aug",h:21,l:13},{m:"Sep",h:16,l:9},{m:"Oct",h:10,l:4},{m:"Nov",h:4,l:0},{m:"Dec",h:1,l:-3}],
+            "NOR": [{m:"Jan",h:-1,l:-7},{m:"Feb",h:-1,l:-7},{m:"Mar",h:3,l:-4},{m:"Apr",h:9,l:1},{m:"May",h:15,l:6},{m:"Jun",h:19,l:10},{m:"Jul",h:22,l:13},{m:"Aug",h:20,l:12},{m:"Sep",h:15,l:8},{m:"Oct",h:8,l:3},{m:"Nov",h:3,l:-1},{m:"Dec",h:0,l:-5}],
+            "GRL": [{m:"Jan",h:-20,l:-28},{m:"Feb",h:-21,l:-29},{m:"Mar",h:-17,l:-26},{m:"Apr",h:-9,l:-17},{m:"May",h:0,l:-6},{m:"Jun",h:6,l:1},{m:"Jul",h:9,l:3},{m:"Aug",h:8,l:2},{m:"Sep",h:3,l:-2},{m:"Oct",h:-4,l:-9},{m:"Nov",h:-11,l:-17},{m:"Dec",h:-17,l:-24}],
+        };
+
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+        // --- D3 MAP SETUP ---
+        const container = d3.select("#map-container");
+        const tooltip = d3.select("#tooltip");
+        let width, height, svg, path, projection;
+
+        function setupMap() {
+            width = container.node().getBoundingClientRect().width;
+            height = container.node().getBoundingClientRect().height;
+
+            container.selectAll("svg").remove(); // Clear previous SVG on resize
+
+            svg = container.append("svg")
+                .attr("width", width)
+                .attr("height", height);
+
+            projection = d3.geoMercator()
+                .scale(width / 2 / Math.PI * 0.9)
+                .translate([width / 2, height / 2 * 1.3]);
+            
+            path = d3.geoPath().projection(projection);
+
+            // Add zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([1, 12])
+                .on("zoom", (event) => {
+                    g.attr("transform", event.transform);
+                });
+            svg.call(zoom);
+
+            const g = svg.append("g");
+            
+             // Draw graticule (map lines)
+            const graticule = d3.geoGraticule10();
+            g.append("path")
+                .datum(graticule)
+                .attr("class", "graticule")
+                .attr("d", path);
+
+            // Load and display the world map
+            d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(world => {
+                const countries = topojson.feature(world, world.objects.countries).features;
+                
+                g.selectAll(".country")
+                    .data(countries)
+                    .enter().append("path")
+                    .attr("class", "country")
+                    .attr("d", path)
+                    .attr("data-id", d => d.properties.name) // Use name for ID
+                    .on("mouseover", handleMouseOver)
+                    .on("mousemove", handleMouseMove)
+                    .on("mouseout", handleMouseOut);
+                
+                updateMapColors(); // Initial color update
+            }).catch(error => {
+                console.error("Error loading map data:", error);
+                container.html(`<div class="text-red-400 p-8">Failed to load map data. Please check the console.</div>`);
+            });
+        }
+        
+        // --- COLOR SCALE AND LOGIC ---
+        const colorScale = d3.scaleSequential(d3.interpolateRdYlBu).domain([40, -30]);
+        document.getElementById('legend-gradient').style.background = 'linear-gradient(to right, #4575b4, #ffffbf, #d73027)';
+
+
+        function calculateTemperature(countryCode) {
+            const data = temperatureData[countryCode];
+            if (!data) return null;
+
+            const selectedMonths = Array.from(document.querySelectorAll('#month-checkboxes input:checked')).map(cb => cb.value);
+            const tempType = document.getElementById('temperature-type').value;
+
+            if (selectedMonths.length === 0) return null;
+            
+            const temps = data.filter(d => selectedMonths.includes(d.m));
+            if (temps.length === 0) return null;
+
+            let total;
+            if (tempType === 'avg') {
+                total = temps.reduce((sum, d) => sum + (d.h + d.l) / 2, 0);
+            } else if (tempType === 'high') {
+                total = temps.reduce((sum, d) => sum + d.h, 0);
+            } else { // low
+                total = temps.reduce((sum, d) => sum + d.l, 0);
+            }
+            
+            return total / temps.length;
+        }
+
+        // --- MAP UPDATE AND INTERACTIVITY ---
+        function updateMapColors() {
+            d3.selectAll(".country")
+                .transition()
+                .duration(300)
+                .attr("fill", d => {
+                    // Match country name to our data keys (this is a simplified approach)
+                    // A more robust solution would use ISO codes if available in the geo data
+                    const countryName = d.properties.name;
+                    // This is a basic mapping. In a real app, you'd use a proper lookup table.
+                    const countryCode = Object.keys(iso_a3_to_name).find(key => iso_a3_to_name[key] === countryName);
+                    
+                    const temp = calculateTemperature(countryCode);
+                    return temp !== null ? colorScale(temp) : "#4B5563"; // gray-600 for no data
+                });
+        }
+        
+        function handleMouseOver(event, d) {
+            tooltip.style("opacity", 1);
+        }
+
+        function handleMouseMove(event, d) {
+            const countryName = d.properties.name;
+            const countryCode = Object.keys(iso_a3_to_name).find(key => iso_a3_to_name[key] === countryName);
+            const data = temperatureData[countryCode];
+            
+            let content = `<h3>${countryName}</h3>`;
+            if (data) {
+                content += `<table><tr><th>Month</th><th>High</th><th>Low</th></tr>`;
+                data.forEach(monthData => {
+                    content += `<tr><td>${monthData.m}</td><td>${monthData.h}°C</td><td>${monthData.l}°C</td></tr>`;
+                });
+                content += `</table>`;
+            } else {
+                content += "<p>No temperature data available.</p>";
+            }
+            
+            tooltip.html(content)
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 28) + "px");
+        }
+
+        function handleMouseOut(event, d) {
+            tooltip.style("opacity", 0);
+        }
+
+        // --- SIDEBAR CONTROLS ---
+        function setupControls() {
+            const container = d3.select("#month-checkboxes");
+            months.forEach(month => {
+                const label = container.append("label")
+                    .attr("class", "flex items-center space-x-2 cursor-pointer hover:text-blue-300");
+                
+                label.append("input")
+                    .attr("type", "checkbox")
+                    .attr("value", month)
+                    .attr("checked", true)
+                    .attr("class", "form-checkbox h-4 w-4 bg-gray-700 border-gray-600 rounded text-blue-500 focus:ring-blue-500")
+                    .on("change", updateMapColors);
+                
+                label.append("span").text(month);
+            });
+
+            d3.select("#select-all").on("click", () => {
+                d3.selectAll("#month-checkboxes input").property("checked", true);
+                updateMapColors();
+            });
+
+            d3.select("#deselect-all").on("click", () => {
+                d3.selectAll("#month-checkboxes input").property("checked", false);
+                updateMapColors();
+            });
+            
+            d3.select("#temperature-type").on("change", updateMapColors);
+        }
+        
+        // Helper to map country names from topojson to our data keys
+        const iso_a3_to_name = {
+            "USA": "United States of America", "CAN": "Canada", "MEX": "Mexico", "BRA": "Brazil",
+            "ARG": "Argentina", "GBR": "United Kingdom", "FRA": "France", "DEU": "Germany", "RUS": "Russia",
+            "CHN": "China", "IND": "India", "JPN": "Japan", "AUS": "Australia", "EGY": "Egypt",
+            "ZAF": "South Africa", "NGA": "Nigeria", "IDN": "Indonesia", "SAU": "Saudi Arabia",
+            "IRN": "Iran", "TUR": "Turkey", "ESP": "Spain", "ITA": "Italy", "SWE": "Sweden",
+            "NOR": "Norway", "GRL": "Greenland"
+        };
+
+
+        // --- INITIALIZATION ---
+        window.onload = () => {
+            setupControls();
+            setupMap();
+        };
+
+        window.onresize = setupMap;
+
+    </script>
+</body>
+</html>
